@@ -1,5 +1,5 @@
 import type { AddressInfo } from "node:net";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import piChatMultiuserDemoExtension from "../src/extension.js";
@@ -29,15 +29,23 @@ async function connect(url: string): Promise<WebSocket> {
   return socket;
 }
 
+/** Stands in for the Pi host, which hands the factory nothing but its API. */
+function loadExtension(): void {
+  piChatMultiuserDemoExtension({ on: () => {} } as unknown as ExtensionAPI);
+}
+
 /**
- * Stands in for the Pi host: the extension picks up its dialog surface from
- * `session_start`, and the name typed into that dialog is what a guest ends up
- * being called.
+ * Answers the next dialog the way the owner's browser would: the modal arrives
+ * as a `prompts` message and the typed name goes back as `uiPromptResponse`.
  */
-function loadExtension(guestName: string): void {
-  const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
-  piChatMultiuserDemoExtension({ on: (event: string, handler: never) => handlers.set(event, handler) } as unknown as ExtensionAPI);
-  handlers.get("session_start")?.({}, { ui: { input: async () => guestName } } as unknown as ExtensionContext);
+async function answerPrompt(socket: WebSocket, value: string): Promise<void> {
+  const message = (await receiveOfType(socket, "prompts")) as { prompts: { id: string; kind: string }[] };
+  const prompt = message.prompts[0];
+  if (!prompt) throw new Error("No dialog was opened for the owner to answer.");
+  socket.send(JSON.stringify({
+    version: PROTOCOL_VERSION, sessionId: "fake-session",
+    type: "uiPromptResponse", promptId: prompt.id, result: { cancelled: false, value },
+  }));
 }
 
 /** The exact sequence a user performs: enable, invite, then grant write access. */
@@ -54,7 +62,7 @@ describe("multi-user demo end to end", () => {
 
   it("lets the owner enable the demo, keep a guest read-only, then grant write access", async () => {
     const extensions = getPiChatExtensionRegistry();
-    loadExtension("Anna");
+    loadExtension();
     server = createPiChatServer(new FakeRuntimeAdapter(), undefined, undefined, undefined, extensions);
     await new Promise<void>((resolve) => server!.httpServer.listen(0, "127.0.0.1", resolve));
     const port = (server.httpServer.address() as AddressInfo).port;
@@ -74,10 +82,12 @@ describe("multi-user demo end to end", () => {
     // 2. Owner creates a named link. The name is typed into the dialog, so it
     //    never travels in the URL where the guest could edit it.
     const invited = receiveOfType(owner, "notification");
+    const named = answerPrompt(owner, "Anna");
     owner.send(JSON.stringify({
       version: PROTOCOL_VERSION, sessionId: "fake-session",
       type: "runExtensionAction", actionId: "multiuser-demo.invite",
     }));
+    await named;
     const link = ((await invited) as { message: string }).message;
     expect(link).toContain("Invite link for Anna");
     const token = /invite=([\w-]+)/.exec(link)?.[1];

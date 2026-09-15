@@ -13,6 +13,10 @@ It is built on Pi Chat's extension API — slots, actions, badges, extension sta
 
 Unknown tokens are rejected rather than downgraded, and an unknown connection resolves to the lesser role, so a typo in a link never grants more access than the link carried.
 
+**Sharing is server-wide, not per session.** An invite link authorizes a WebSocket connection before any session is in play, and Pi Chat already sends the tab list and every open session to every authorized connection. A guest is therefore a guest of the server and keeps one role across all open sessions; opening another session does not change who may do what.
+
+Pi loads extensions once per open session, so this extension keeps its state in `chat.store` and passes `{ owner }` with every hook and badge. Without that, opening a second session installed a second, empty copy of the extension whose stale handlers kept vetoing guest prompts.
+
 ## Requirements
 
 - Pi Chat checked out locally, since Pi Chat is not published to npm.

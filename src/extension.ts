@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getPiChatExtensionRegistry } from "./pi-chat.js";
 
 /**
@@ -17,6 +17,13 @@ import { getPiChatExtensionRegistry } from "./pi-chat.js";
  * watch and drive the same session. The owner mints one link per guest and
  * names the guest while doing so; everyone who arrives without a link is an
  * owner.
+ *
+ * Sharing is server-wide rather than per session. A link authorizes a
+ * connection, in `connection.authorize`, before any session is in play, and Pi
+ * Chat sends the tab list and every open session to every authorized
+ * connection anyway. A guest is therefore a guest of the server and keeps one
+ * role in every tab, and opening another session changes nothing about who may
+ * do what.
  *
  * The name lives here rather than in the link. A query parameter is editable by
  * whoever holds the URL, so `?name=...` would be a claim rather than a fact,
@@ -50,27 +57,40 @@ interface Invite {
 
 const NAME_MAX = 32;
 
-export default function piChatMultiuserDemoExtension(pi: ExtensionAPI): void {
-  const chat = getPiChatExtensionRegistry();
-  const participants = new Map<string, Participant>();
-  const invites = new Map<string, Invite>();
-  let joins = 0;
-  let enabled = false;
-  let guestsMayWrite = false;
-  // Learned from the first browser that connects, so the invite link the owner
-  // is shown points at the host they actually reached rather than a guess.
-  let origin = "";
-
+/**
+ * Everything the demo knows, kept where a second session's load can find it.
+ *
+ * Pi loads extensions once per open session, so opening a tab runs this factory
+ * again. Held in the closure, the roles, invites and policy the owner had set
+ * up were replaced by a fresh disabled set, and the stale authorization
+ * handlers of the first load went on vetoing guest prompts against it.
+ */
+interface State {
+  participants: Map<string, Participant>;
+  invites: Map<string, Invite>;
+  joins: number;
+  enabled: boolean;
+  guestsMayWrite: boolean;
   /**
-   * `ctx.ui` is only handed to event handlers, not to the extension factory, so
-   * the dialog surface has to be captured from a session event and kept. Pi
-   * rebinds it per session; the demo drives a single session, which is the
-   * assumption behind holding on to one reference.
+   * Learned from the first browser that connects, so the invite link the owner
+   * is shown points at the host they actually reached rather than a guess.
    */
-  let ui: ExtensionUIContext | undefined;
-  pi.on("session_start", (_event, ctx) => {
-    ui = ctx.ui;
-  });
+  origin: string;
+}
+
+/** Owns every registration this extension makes, so a reload replaces its own. */
+const OWNER = "multiuser-demo";
+
+export default function piChatMultiuserDemoExtension(_pi: ExtensionAPI): void {
+  const chat = getPiChatExtensionRegistry();
+  const state = chat.store<State>(OWNER, () => ({
+    participants: new Map(),
+    invites: new Map(),
+    joins: 0,
+    enabled: false,
+    guestsMayWrite: false,
+    origin: "",
+  }));
 
   // While disabled every browser is an owner, so nothing is restricted and the
   // enable button below stays usable. Once enabled a connection the demo has
@@ -78,8 +98,8 @@ export default function piChatMultiuserDemoExtension(pi: ExtensionAPI): void {
   // `connection.authorize` before it can act, so an unknown id here is an
   // anomaly, and an anomaly should not be granted control of the session.
   const roleOf = (connectionId?: string): Role => {
-    if (!enabled) return "owner";
-    const participant = participants.get(connectionId ?? "");
+    if (!state.enabled) return "owner";
+    const participant = state.participants.get(connectionId ?? "");
     if (!participant) return "guest";
     return participant.invite ? "guest" : "owner";
   };
@@ -91,7 +111,7 @@ export default function piChatMultiuserDemoExtension(pi: ExtensionAPI): void {
    */
   function describe(): Array<{ id: string; role: Role; label: string; invite?: string }> {
     let owners = 0;
-    return [...participants.entries()]
+    return [...state.participants.entries()]
       .sort(([, a], [, b]) => a.joined - b.joined)
       .map(([id, participant]) => {
         const role = roleOf(id);
@@ -105,12 +125,12 @@ export default function piChatMultiuserDemoExtension(pi: ExtensionAPI): void {
 
   function publishState(): void {
     chat.setExtensionState("multiuser-demo", ({ connectionId }) => ({
-      enabled,
+      enabled: state.enabled,
       role: roleOf(connectionId),
-      guestsMayWrite,
-      connectionCount: participants.size,
+      guestsMayWrite: state.guestsMayWrite,
+      connectionCount: state.participants.size,
       participants: describe(),
-      invites: [...invites.entries()].map(([token, invite]) => ({ token, name: invite.name })),
+      invites: [...state.invites.entries()].map(([token, invite]) => ({ token, name: invite.name })),
     }));
   }
 
@@ -122,10 +142,10 @@ export default function piChatMultiuserDemoExtension(pi: ExtensionAPI): void {
     chat.registerButton({
       id: "multiuser-demo.enable.settings",
       slot: "settings.section",
-      label: enabled ? "Disable multi-user demo" : "Enable multi-user demo",
+      label: state.enabled ? "Disable multi-user demo" : "Enable multi-user demo",
       actionId: "multiuser-demo.toggleEnabled",
     });
-    if (!enabled) {
+    if (!state.enabled) {
       chat.unregisterButton("multiuser-demo.status.header");
       chat.unregisterButton("multiuser-demo.permission.header");
       chat.unregisterButton("multiuser-demo.invite.header");
@@ -149,7 +169,7 @@ export default function piChatMultiuserDemoExtension(pi: ExtensionAPI): void {
     chat.registerButton({
       id: "multiuser-demo.permission.header",
       slot: "session.header.right",
-      label: guestsMayWrite ? "Block guest prompts" : "Allow guest prompts",
+      label: state.guestsMayWrite ? "Block guest prompts" : "Allow guest prompts",
       actionId: "multiuser-demo.toggleGuestWrite",
     });
   }
@@ -160,23 +180,23 @@ export default function piChatMultiuserDemoExtension(pi: ExtensionAPI): void {
   // Each browser is told about its own role, not about everyone's, so the badge
   // has to be resolved per connection rather than registered once.
   chat.registerBadge(({ connectionId }) => {
-    if (!enabled) return undefined;
+    if (!state.enabled) return undefined;
     if (roleOf(connectionId) === "owner") return { id: "multiuser-demo.role", slot: "session.status", label: "Owner", tone: "green" };
     return {
       id: "multiuser-demo.role",
       slot: "session.status",
-      label: guestsMayWrite ? "Guest" : "Guest (read-only)",
-      tone: guestsMayWrite ? "yellow" : "red",
+      label: state.guestsMayWrite ? "Guest" : "Guest (read-only)",
+      tone: state.guestsMayWrite ? "yellow" : "red",
     };
-  });
+  }, { owner: OWNER });
 
   chat.registerAction({
     id: "multiuser-demo.toggleEnabled",
     title: "Enable or disable the multi-user demo",
     run: (ctx) => {
       if (roleOf(ctx.connectionId) !== "owner") throw new Error("Only the owner can turn the multi-user demo off.");
-      enabled = !enabled;
-      if (enabled) {
+      state.enabled = !state.enabled;
+      if (state.enabled) {
         // Connections that were already open predate the demo and carry no
         // invite, so they come out as owners without touching their records.
         chat.setConnectionMode("multi-connection");
@@ -186,12 +206,12 @@ export default function piChatMultiuserDemoExtension(pi: ExtensionAPI): void {
         // handed out earlier must not quietly come back to life when the demo
         // is switched on again later.
         chat.setConnectionMode("single-controller");
-        guestsMayWrite = false;
-        invites.clear();
+        state.guestsMayWrite = false;
+        state.invites.clear();
       }
       publishButtons();
       publishState();
-      ctx.notify(enabled ? "Multi-user demo enabled: other browsers can join this session." : "Multi-user demo disabled.");
+      ctx.notify(state.enabled ? "Multi-user demo enabled: other browsers can join this session." : "Multi-user demo disabled.");
     },
   });
 
@@ -200,16 +220,18 @@ export default function piChatMultiuserDemoExtension(pi: ExtensionAPI): void {
     title: "Create an invite link",
     run: async (ctx) => {
       if (roleOf(ctx.connectionId) !== "owner") throw new Error("Only the owner can create invite links.");
-      if (!enabled) throw new Error("Enable the multi-user demo before inviting anyone.");
-      if (!ui) throw new Error("No dialog surface is available to ask for a name.");
-      const answer = await ui.input("Name for this guest", "e.g. Anna");
+      if (!state.enabled) throw new Error("Enable the multi-user demo before inviting anyone.");
+      // The surface belongs to the session the button was pressed in, so the
+      // modal opens where the owner is looking even with several tabs open.
+      if (!ctx.ui) throw new Error("Open a session before inviting anyone: the name is asked for in a dialog.");
+      const answer = await ctx.ui.input("Name for this guest", "e.g. Anna");
       const name = answer?.trim().slice(0, NAME_MAX);
       // An empty answer is a cancelled dialog, which is not an error.
       if (!name) return;
       const token = randomUUID();
-      invites.set(token, { name, createdBy: ctx.connectionId ?? "owner" });
+      state.invites.set(token, { name, createdBy: ctx.connectionId ?? "owner" });
       publishState();
-      ctx.notify(`Invite link for ${name}: ${origin}/?invite=${token}`);
+      ctx.notify(`Invite link for ${name}: ${state.origin}/?invite=${token}`);
     },
   });
 
@@ -219,8 +241,8 @@ export default function piChatMultiuserDemoExtension(pi: ExtensionAPI): void {
     run: (ctx) => {
       const listed = describe().map((item) => `${item.label} (${item.role})`).join(", ") || "none";
       ctx.notify(
-        `Multi-user demo: ${participants.size} connected, ${guestCount()} guest(s). ` +
-          `Guests may ${guestsMayWrite ? "send prompts" : "only watch"}. Participants: ${listed}.`,
+        `Multi-user demo: ${state.participants.size} connected, ${guestCount()} guest(s). ` +
+          `Guests may ${state.guestsMayWrite ? "send prompts" : "only watch"}. Participants: ${listed}.`,
       );
     },
   });
@@ -232,42 +254,42 @@ export default function piChatMultiuserDemoExtension(pi: ExtensionAPI): void {
       // Only the owner may change the policy, otherwise a guest could simply
       // grant itself write access with the same button.
       if (roleOf(ctx.connectionId) !== "owner") throw new Error("Only the owner can change guest access.");
-      guestsMayWrite = !guestsMayWrite;
+      state.guestsMayWrite = !state.guestsMayWrite;
       publishButtons();
       publishState();
-      ctx.notify(`Guests may now ${guestsMayWrite ? "send prompts" : "only watch"}.`);
+      ctx.notify(`Guests may now ${state.guestsMayWrite ? "send prompts" : "only watch"}.`);
     },
   });
 
   chat.use("connection.authorize", ({ connectionId, request }) => {
-    const token = enabled ? request?.query.invite : undefined;
+    const token = state.enabled ? request?.query.invite : undefined;
     if (token) {
-      const invite = invites.get(token);
+      const invite = state.invites.get(token);
       // An unknown token is rejected rather than downgraded to a guest, and
       // above all it never falls through to the owner branch below: a typo in a
       // link must not hand out more access than the link itself carries.
       if (!invite) return { allow: false, reason: "This invite link is not valid." };
-      joins += 1;
-      participants.set(connectionId, { joined: joins, invite: token, name: invite.name });
+      state.joins += 1;
+      state.participants.set(connectionId, { joined: state.joins, invite: token, name: invite.name });
       publishState();
       return;
     }
     const host = request?.headers.host;
-    if (!origin && typeof host === "string") origin = `http://${host}`;
-    joins += 1;
-    participants.set(connectionId, { joined: joins });
+    if (!state.origin && typeof host === "string") state.origin = `http://${host}`;
+    state.joins += 1;
+    state.participants.set(connectionId, { joined: state.joins });
     publishState();
-  });
+  }, { owner: OWNER });
 
   chat.use("prompt.authorize", ({ connectionId }) => {
-    if (roleOf(connectionId) === "owner" || guestsMayWrite) return { allow: true };
+    if (roleOf(connectionId) === "owner" || state.guestsMayWrite) return { allow: true };
     return { allow: false, reason: "This browser joined as a read-only guest. Ask the owner to allow guest prompts." };
-  });
+  }, { owner: OWNER });
 
   chat.use("abort.authorize", ({ connectionId }) => {
-    if (roleOf(connectionId) === "owner" || guestsMayWrite) return { allow: true };
+    if (roleOf(connectionId) === "owner" || state.guestsMayWrite) return { allow: true };
     return { allow: false, reason: "Read-only guests cannot stop a run." };
-  });
+  }, { owner: OWNER });
 
   // Dialogs are session state, so every browser sees the owner's naming prompt
   // and a tool call's permission gate alike. A read-only guest must not answer
@@ -275,9 +297,9 @@ export default function piChatMultiuserDemoExtension(pi: ExtensionAPI): void {
   // to send prompts can also answer the permission gate its own prompt opened,
   // which would otherwise stall until the owner looked at the screen.
   chat.use("dialog.authorize", ({ connectionId }) => {
-    if (roleOf(connectionId) === "owner" || guestsMayWrite) return { allow: true };
+    if (roleOf(connectionId) === "owner" || state.guestsMayWrite) return { allow: true };
     return { allow: false, reason: "Read-only guests cannot answer dialogs." };
-  });
+  }, { owner: OWNER });
 
   chat.use("action.authorize", ({ connectionId, actionId }) => {
     if (roleOf(connectionId) === "owner") return { allow: true };
@@ -285,10 +307,10 @@ export default function piChatMultiuserDemoExtension(pi: ExtensionAPI): void {
     // the guest does not own, including the app-level restart.
     if (actionId === "multiuser-demo.status") return { allow: true };
     return { allow: false, reason: "Read-only guests cannot change this session." };
-  });
+  }, { owner: OWNER });
 
   chat.on("connection.close", ({ connectionId }) => {
-    participants.delete(connectionId);
+    state.participants.delete(connectionId);
     publishState();
-  });
+  }, { owner: OWNER });
 }

@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import piChatMultiuserDemoExtension from "../src/extension.js";
 import type { PiChatExtensionRegistry } from "../src/pi-chat.js";
@@ -7,18 +7,25 @@ import { getPiChatExtensionRegistry, resetPiChatExtensionRegistryForTests } from
 afterEach(resetPiChatExtensionRegistryForTests);
 
 /**
- * The extension picks up `ctx.ui` from `session_start`, so the fake host has to
- * deliver that event before any dialog-driven action can run.
+ * Dialogs reach the extension through the action context, so the host only has
+ * to hand the factory an `ExtensionAPI`.
  */
 function load(input: (title: string, placeholder?: string) => Promise<string | undefined> = async () => undefined) {
   const registry = getPiChatExtensionRegistry();
-  const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
-  piChatMultiuserDemoExtension({ on: (event: string, handler: never) => handlers.set(event, handler) } as unknown as ExtensionAPI);
-  handlers.get("session_start")?.({}, { ui: { input } } as unknown as ExtensionContext);
+  answer = input;
+  piChatMultiuserDemoExtension({ on: () => {} } as unknown as ExtensionAPI);
   return registry;
 }
 
-const actionContext = (connectionId?: string) => ({ connectionId, sessionId: "s1", notify: vi.fn() });
+/** What the modal of the session an action ran from returns. */
+let answer: (title: string, placeholder?: string) => Promise<string | undefined> = async () => undefined;
+
+const actionContext = (connectionId?: string) => ({
+  connectionId,
+  sessionId: "s1",
+  notify: vi.fn(),
+  ui: { input: (title: string, placeholder?: string) => answer(title, placeholder) } as never,
+});
 
 const ownerRequest = { query: {}, headers: { host: "localhost:4000" } } as never;
 
@@ -197,6 +204,37 @@ describe("multi-user demo extension", () => {
 
     expect(labels()).toEqual(["Owner 1", "Owner 2"]);
     expect(new Set(labels()).size).toBe(2);
+  });
+
+  // Pi loads extensions once per open session, so opening a second tab runs the
+  // factory again. That used to hand out a fresh disabled closure while the
+  // first load's authorization handlers stayed behind and kept vetoing against
+  // it, which left the guest read-only whatever the owner pressed.
+  describe("a second session loading the extension again", () => {
+    it("keeps the roles, invites and policy the owner set up", async () => {
+      const registry = load(async () => "Anna");
+      await enable(registry);
+      const token = await createInvite(registry, "Anna");
+      await registry.authorize("connection.authorize", { connectionId: "guest", request: inviteRequest(token) });
+
+      load(async () => "Anna");
+
+      expect(registry.connectionMode()).toBe("multi-connection");
+      expect(registry.snapshot({ connectionId: "guest" }).state["multiuser-demo"]).toMatchObject({ enabled: true, role: "guest" });
+      // The guest keeps the link it joined with rather than being locked out.
+      expect(await registry.authorize("connection.authorize", { connectionId: "late", request: inviteRequest(token) })).toEqual({ allow: true });
+    });
+
+    it("does not leave a stale handler vetoing guest prompts", async () => {
+      const registry = load(async () => "Anna");
+      await enable(registry);
+      await registry.authorize("connection.authorize", { connectionId: "guest", request: inviteRequest(await createInvite(registry, "Anna")) });
+
+      load(async () => "Anna");
+      await registry.runAction("multiuser-demo.toggleGuestWrite", actionContext("owner"));
+
+      expect(await registry.authorize("prompt.authorize", { connectionId: "guest" })).toEqual({ allow: true });
+    });
   });
 
   it("refuses to let a guest turn the demo off", async () => {
