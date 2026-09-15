@@ -151,11 +151,14 @@ export default function piChatMultiuserDemoExtension(_pi: ExtensionAPI): void {
       chat.unregisterButton("multiuser-demo.invite.header");
       return;
     }
+    // Minting links is the owner's alone, for the same reason as the toggle
+    // below: a guest that presses it only learns it was not meant for them.
     chat.registerButton({
       id: "multiuser-demo.invite.header",
       slot: "session.header.right",
       label: "Invite",
       actionId: "multiuser-demo.invite",
+      visibleTo: ({ connectionId }) => roleOf(connectionId) === "owner",
     });
     chat.registerButton({
       id: "multiuser-demo.status.header",

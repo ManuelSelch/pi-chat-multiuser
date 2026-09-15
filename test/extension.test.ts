@@ -85,11 +85,13 @@ describe("multi-user demo extension", () => {
     expect(registry.snapshot({ connectionId: "guest" }).badges).toEqual([
       { id: "multiuser-demo.role", slot: "session.status", label: "Guest (read-only)", tone: "red" },
     ]);
-    // The guest-access toggle belongs to the owner, so the guest is not shown
-    // a control whose only possible answer is a refusal.
-    expect(registry.snapshot({ connectionId: "guest" }).buttons.map((button) => button.id)).not.toContain(
-      "multiuser-demo.permission.header",
-    );
+    // Inviting and the guest-access toggle belong to the owner, so the guest is
+    // not shown controls whose only possible answer is a refusal. Reading the
+    // participant list is harmless and stays.
+    expect(registry.snapshot({ connectionId: "guest" }).buttons.map((button) => button.id)).toEqual([
+      "multiuser-demo.enable.settings",
+      "multiuser-demo.status.header",
+    ]);
   });
 
   it("names the guest from the invite the owner created, not from the link", async () => {

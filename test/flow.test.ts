@@ -131,11 +131,12 @@ describe("multi-user demo end to end", () => {
     };
     const guestControl = snapshot.extensions.buttons.find((button) => button.id === "multiuser-demo.permission.header");
     expect(guestControl?.label).toBe("Block guest prompts");
-    // The guest never sees that control at all. It is the owner's policy, and
-    // offering it to the guest only to refuse the click reads as a setting the
-    // guest owns. The harmless "Users" button stays.
+    // The guest never sees that control, nor the invite button. They are the
+    // owner's, and offering one to the guest only to refuse the click reads as
+    // a setting the guest owns. The harmless "Users" button stays.
     const guestButtons = ((await guestSnapshot) as { extensions: { buttons: { id: string }[] } }).extensions.buttons;
     expect(guestButtons.map((button) => button.id)).not.toContain("multiuser-demo.permission.header");
+    expect(guestButtons.map((button) => button.id)).not.toContain("multiuser-demo.invite.header");
     expect(guestButtons.map((button) => button.id)).toContain("multiuser-demo.status.header");
     // The guest is called what the owner typed into the dialog, and the
     // stranger that was turned away is in nobody's participant list.
