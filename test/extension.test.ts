@@ -55,6 +55,8 @@ describe("multi-user demo extension", () => {
     const registry = load();
 
     expect(registry.connectionMode()).toBe("single-controller");
+    // Nobody is a guest yet while the demo is off, so the button that switches
+    // it on is there for whoever opened the browser.
     const snapshot = registry.snapshot({ connectionId: "guest" });
     expect(snapshot.buttons.map((button) => button.slot)).toEqual(["settings.section"]);
     expect(snapshot.buttons[0]).toMatchObject({ label: "Enable multi-user demo" });
@@ -89,7 +91,6 @@ describe("multi-user demo extension", () => {
     // not shown controls whose only possible answer is a refusal. Reading the
     // participant list is harmless and stays.
     expect(registry.snapshot({ connectionId: "guest" }).buttons.map((button) => button.id)).toEqual([
-      "multiuser-demo.enable.settings",
       "multiuser-demo.status.header",
     ]);
   });

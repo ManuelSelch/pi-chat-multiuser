@@ -139,11 +139,20 @@ export default function piChatMultiuserDemoExtension(_pi: ExtensionAPI): void {
    * how the visible controls follow the on/off state.
    */
   function publishButtons(): void {
+    // Guests must not be offered "Disable multi-user demo": it is the most
+    // alarming of the controls to be handed and refused, since switching the
+    // demo off is what would end their own access.
+    //
+    // The predicate needs no special case for the disabled state. While the
+    // demo is off `roleOf` calls every browser an owner, which is exactly why
+    // the button that switches it on stays visible to whoever is there to
+    // press it.
     chat.registerButton({
       id: "multiuser-demo.enable.settings",
       slot: "settings.section",
       label: state.enabled ? "Disable multi-user demo" : "Enable multi-user demo",
       actionId: "multiuser-demo.toggleEnabled",
+      visibleTo: ({ connectionId }) => roleOf(connectionId) === "owner",
     });
     if (!state.enabled) {
       chat.unregisterButton("multiuser-demo.status.header");
