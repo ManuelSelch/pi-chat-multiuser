@@ -1,0 +1,38 @@
+{
+  "name": "pi-chat-multiuser",
+  "version": "0.1.0",
+  "description": "Multi-user invite links, roles, and read-only guests for Pi Chat",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ManuelSelch/pi-chat-multiuser.git"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-chat",
+    "multiuser"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/extension.ts"
+    ]
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22.19"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@types/node": "^26.5.1",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.9.2",
+    "vitest": "^5.0.0",
+    "ws": "^8.21.3"
+  }
+}
