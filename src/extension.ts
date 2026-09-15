@@ -166,11 +166,17 @@ export default function piChatMultiuserDemoExtension(_pi: ExtensionAPI): void {
     // Named after what pressing it does, like the enable button above. A fixed
     // "Guest access" label left the owner with nothing but a toast to tell the
     // two states apart, so the toggle looked like it had done nothing.
+    //
+    // Only the owner sees it. `action.authorize` below already refuses a guest
+    // that presses it, but a control which exists solely to say "not for you"
+    // is worse than no control: it reads as the guest's own setting, and its
+    // label leaks the policy as an offer the guest cannot take.
     chat.registerButton({
       id: "multiuser-demo.permission.header",
       slot: "session.header.right",
       label: state.guestsMayWrite ? "Block guest prompts" : "Allow guest prompts",
       actionId: "multiuser-demo.toggleGuestWrite",
+      visibleTo: ({ connectionId }) => roleOf(connectionId) === "owner",
     });
   }
 

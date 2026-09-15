@@ -71,13 +71,13 @@ describe("multi-user demo extension", () => {
     await enable(registry);
 
     expect(registry.connectionMode()).toBe("multi-connection");
-    expect(registry.snapshot().buttons.map((button) => button.id)).toEqual([
+    expect(registry.snapshot({ connectionId: "owner" }).buttons.map((button) => button.id)).toEqual([
       "multiuser-demo.enable.settings",
       "multiuser-demo.invite.header",
       "multiuser-demo.status.header",
       "multiuser-demo.permission.header",
     ]);
-    expect(registry.snapshot().buttons[0]).toMatchObject({ label: "Disable multi-user demo" });
+    expect(registry.snapshot({ connectionId: "owner" }).buttons[0]).toMatchObject({ label: "Disable multi-user demo" });
 
     const token = await createInvite(registry, "Anna");
     await registry.authorize("connection.authorize", { connectionId: "guest", request: inviteRequest(token) });
@@ -85,6 +85,11 @@ describe("multi-user demo extension", () => {
     expect(registry.snapshot({ connectionId: "guest" }).badges).toEqual([
       { id: "multiuser-demo.role", slot: "session.status", label: "Guest (read-only)", tone: "red" },
     ]);
+    // The guest-access toggle belongs to the owner, so the guest is not shown
+    // a control whose only possible answer is a refusal.
+    expect(registry.snapshot({ connectionId: "guest" }).buttons.map((button) => button.id)).not.toContain(
+      "multiuser-demo.permission.header",
+    );
   });
 
   it("names the guest from the invite the owner created, not from the link", async () => {
